@@ -1,0 +1,6 @@
+src/
+test/
+example/
+tsconfig*.json
+*.tsbuildinfo
+.eslintrc*

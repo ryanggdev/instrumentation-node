@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node-version }} / ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["20.x", "22.x"]
+        package:
+          - otel-nats
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - name: Set NATS server version
+        run: echo "NATS_VERSION=v2.10.22" >> $GITHUB_ENV
+
+      - name: Download nats-server
+        run: |
+          wget -q "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.zip" -O /tmp/nats-server.zip
+          unzip -q /tmp/nats-server.zip -d /tmp
+          mv /tmp/nats-server-${NATS_VERSION}-linux-amd64/nats-server /tmp/nats-server
+          echo "/tmp" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+        env:
+          CI: "true"
+          NATS_SERVER_BIN: /tmp/nats-server
