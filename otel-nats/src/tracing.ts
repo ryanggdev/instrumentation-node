@@ -7,10 +7,19 @@ import {
 } from "@opentelemetry/api";
 import type { Span, Tracer, TracerProvider } from "@opentelemetry/api";
 import type {
+  ConsumerOpts,
+  ConsumerOptsBuilder,
+  JetStreamClient,
+  JetStreamPublishOptions,
+  JetStreamPullSubscription,
+  JsMsg,
   Msg,
   MsgHdrs,
   NatsConnection,
+  PubAck,
   PublishOptions,
+  PullOptions,
+  QueuedIterator,
   RequestOptions,
   Subscription,
   SubscriptionOptions,
@@ -284,6 +293,176 @@ function tracedRequest(
 }
 
 // ---------------------------------------------------------------------------
+// JetStream operation wrappers
+// ---------------------------------------------------------------------------
+
+function wrapJsMsgIterator<T extends QueuedIterator<JsMsg>>(
+  iter: T,
+  tracer: Tracer,
+  subject: string,
+): T {
+  return new Proxy(iter, {
+    get(target: T, prop: PropertyKey, receiver: unknown) {
+      if (prop === Symbol.asyncIterator) {
+        return async function* () {
+          for await (const msg of target) {
+            const parentCtx = msg.headers
+              ? propagation.extract(context.active(), msg.headers, natsHeaderGetter)
+              : context.active();
+            const span = startMessagingSpan(
+              tracer,
+              subject,
+              "process",
+              SpanKind.CONSUMER,
+              "process",
+              parentCtx,
+            );
+            try {
+              yield await context.with(
+                trace.setSpan(parentCtx, span),
+                () => Promise.resolve(msg),
+              );
+              span.setStatus({ code: SpanStatusCode.OK });
+            } catch (err) {
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: err instanceof Error ? err.message : String(err),
+              });
+              span.recordException(err as Error);
+              throw err;
+            } finally {
+              span.end();
+            }
+          }
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as T;
+}
+
+function tracedJsPublish(
+  js: JetStreamClient,
+  tracer: Tracer,
+): (
+  subj: string,
+  payload?: Uint8Array,
+  options?: Partial<JetStreamPublishOptions>,
+) => Promise<PubAck> {
+  return async (subj, payload, options) => {
+    const span = startMessagingSpan(
+      tracer,
+      subj,
+      "publish",
+      SpanKind.PRODUCER,
+      "publish",
+    );
+    try {
+      const hdrs = injectContext(options?.headers, span);
+      const ack = await js.publish(subj, payload, { ...options, headers: hdrs });
+      span.setAttribute("messaging.jetstream.stream", ack.stream);
+      span.setAttribute("messaging.jetstream.sequence", ack.seq);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return ack;
+    } catch (err) {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      span.recordException(err as Error);
+      throw err;
+    } finally {
+      span.end();
+    }
+  };
+}
+
+function tracedJsFetch(
+  js: JetStreamClient,
+  tracer: Tracer,
+): (
+  stream: string,
+  durable: string,
+  opts?: Partial<PullOptions>,
+) => QueuedIterator<JsMsg> {
+  return (stream, durable, opts) => {
+    const iter = js.fetch(stream, durable, opts);
+    const subject = `${stream}.${durable}`;
+    return wrapJsMsgIterator(iter, tracer, subject);
+  };
+}
+
+function tracedJsPullSubscribe(
+  js: JetStreamClient,
+  tracer: Tracer,
+): (
+  subject: string,
+  opts: ConsumerOptsBuilder | Partial<ConsumerOpts>,
+) => Promise<JetStreamPullSubscription> {
+  return async (subject, opts) => {
+    const sub = await js.pullSubscribe(subject, opts);
+    return new Proxy(sub, {
+      get(target, prop: PropertyKey, receiver: unknown) {
+        if (prop === Symbol.asyncIterator) {
+          return async function* () {
+            for await (const msg of target) {
+              const parentCtx = msg.headers
+                ? propagation.extract(context.active(), msg.headers, natsHeaderGetter)
+                : context.active();
+              const span = startMessagingSpan(
+                tracer,
+                subject,
+                "process",
+                SpanKind.CONSUMER,
+                "process",
+                parentCtx,
+              );
+              try {
+                yield await context.with(
+                  trace.setSpan(parentCtx, span),
+                  () => Promise.resolve(msg),
+                );
+                span.setStatus({ code: SpanStatusCode.OK });
+              } catch (err) {
+                span.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message: err instanceof Error ? err.message : String(err),
+                });
+                span.recordException(err as Error);
+                throw err;
+              } finally {
+                span.end();
+              }
+            }
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as JetStreamPullSubscription;
+  };
+}
+
+function wrapJetStreamClient(
+  js: JetStreamClient,
+  tracer: Tracer,
+): JetStreamClient {
+  return new Proxy(js, {
+    get(target: JetStreamClient, prop: PropertyKey, receiver: unknown) {
+      switch (prop) {
+        case "publish":
+          return tracedJsPublish(target, tracer);
+        case "fetch":
+          return tracedJsFetch(target, tracer);
+        case "pullSubscribe":
+          return tracedJsPullSubscribe(target, tracer);
+        default:
+          return Reflect.get(target, prop, receiver);
+      }
+    },
+  }) as JetStreamClient;
+}
+
+// ---------------------------------------------------------------------------
 // Public factory
 // ---------------------------------------------------------------------------
 
@@ -334,6 +513,9 @@ export function withTracing(
           return tracedSubscribe(target, tracer);
         case "request":
           return tracedRequest(target, tracer);
+        case "jetstream":
+          return (...args: Parameters<NatsConnection["jetstream"]>) =>
+            wrapJetStreamClient(target.jetstream(...args), tracer);
         default:
           return Reflect.get(target, prop, receiver);
       }
