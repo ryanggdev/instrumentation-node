@@ -1,0 +1,31 @@
+node_modules/
+dist/
+.git/
+.github/
+
+# Test & dev files
+test/
+example/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Config not needed at runtime
+docker-compose.yml
+.eslintrc*
+.npmignore
+tsconfig*.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment / secrets
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
