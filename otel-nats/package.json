@@ -52,8 +52,8 @@
   "devDependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^1.30.0",
-    "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.57.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/sdk-trace-node": "^1.30.0",
     "@types/node": "^20.0.0",
     "ava": "^6.1.0",
@@ -73,5 +73,9 @@
       "tsx"
     ],
     "timeout": "60s"
+  },
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "ws": "^8.20.0"
   }
 }

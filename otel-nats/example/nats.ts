@@ -1,18 +1,19 @@
 /**
  * Example: OpenTelemetry tracing for NATS using @instrumentation-node/otel-nats
+ *         with WebSocket bridge — forwards received messages to WS clients,
+ *         propagating W3C trace context and emitting a websocket.send span.
  *
  * Prerequisites:
  *   - nats-server running on localhost:4222
  *   - Optional: Jaeger on localhost:4318 (OTLP/HTTP) for span visualization
+ *   - npm install ws @types/ws   (only needed for this example)
  *
  * Run:
- *   # Spans exported to Jaeger (or any OTLP-compatible backend):
  *   NATS_URL=nats://localhost:4222 \
  *   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
- *   npx tsx example/index.ts
+ *   npx tsx example/nats.ts
  *
- *   # Without an exporter endpoint, spans are silently discarded:
- *   NATS_URL=nats://localhost:4222 npx tsx example/index.ts
+ * Connect a WebSocket client to ws://localhost:8080 to receive forwarded messages.
  */
 
 import {
@@ -21,9 +22,10 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import { propagation } from "@opentelemetry/api";
+import { context, propagation, trace, SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { connect, StringCodec } from "nats";
-import { withTracing } from "../src/index.js";
+import { WebSocketServer } from "ws";
+import { natsHeaderGetter, withTracing } from "../src/index.js";
 
 // 1. Initialize OTel SDK.
 propagation.setGlobalPropagator(new W3CTraceContextPropagator());
@@ -42,20 +44,60 @@ provider.register();
 
 const sc = StringCodec();
 const NATS_URL = process.env.NATS_URL ?? "nats://127.0.0.1:4222";
+const WS_PORT = Number(process.env.WS_PORT ?? 8080);
+
+// 2. Start WebSocket server.
+const wss = new WebSocketServer({ port: WS_PORT });
+console.log(`WebSocket server listening on ws://localhost:${WS_PORT}`);
+
+const wsTracer = trace.getTracer("websocket-bridge");
+
+function broadcastWithTrace(subject: string, data: string, msgHeaders: import("nats").MsgHdrs | undefined): void {
+  const msgCtx = msgHeaders
+    ? propagation.extract(context.active(), msgHeaders, natsHeaderGetter)
+    : context.active();
+
+  const carrier: Record<string, string> = {};
+  propagation.inject(msgCtx, carrier);
+
+  const wsSpan = wsTracer.startSpan(
+    `${subject} websocket.send`,
+    { kind: SpanKind.PRODUCER },
+    msgCtx,
+  );
+
+  try {
+    const payload = JSON.stringify({ subject, data, ...carrier });
+    for (const client of wss.clients) {
+      if (client.readyState === client.OPEN) {
+        client.send(payload);
+      }
+    }
+    wsSpan.setStatus({ code: SpanStatusCode.OK });
+  } catch (err) {
+    wsSpan.recordException(err as Error);
+    wsSpan.setStatus({ code: SpanStatusCode.ERROR });
+    throw err;
+  } finally {
+    wsSpan.end();
+  }
+}
 
 async function main(): Promise<void> {
   console.log(`Connecting to ${NATS_URL}...`);
   const nc = await connect({ servers: NATS_URL });
   console.log(`Connected to ${nc.getServer()}`);
 
-  // 2. Wrap the connection — all publish/subscribe/request are now traced.
+  // 3. Wrap the connection — all publish/subscribe/request are now traced.
   const tnc = withTracing(nc);
 
-  // Async-iterator subscriber (CONSUMER span per message).
+  // Async-iterator subscriber (CONSUMER span per message) → forward to WebSocket.
   const sub = tnc.subscribe("greet.*");
   const subDone = (async () => {
     for await (const msg of sub) {
-      console.log(`[sub] ${msg.subject}: ${sc.decode(msg.data)}`);
+      const text = sc.decode(msg.data);
+      console.log(`[sub] ${msg.subject}: ${text} → broadcasting to WebSocket clients`);
+      broadcastWithTrace(msg.subject, text, msg.headers);
     }
   })();
 
@@ -86,7 +128,12 @@ async function main(): Promise<void> {
   await nc.close();
 
   await provider.forceFlush();
-  console.log("Connection closed");
+
+  wss.close(() => {
+    console.log("\nWebSocket server closed.");
+  });
+
+  console.log("Connection closed — check Jaeger UI at http://localhost:16686");
 }
 
 main().catch((err) => {
