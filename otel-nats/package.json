@@ -1,6 +1,6 @@
 {
   "name": "@instrumentation-node/otel-nats",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenTelemetry tracing instrumentation for the NATS Node.js client",
   "keywords": [
     "nats",

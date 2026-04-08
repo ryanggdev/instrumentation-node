@@ -5,7 +5,7 @@ import {
   SpanStatusCode,
   trace,
 } from "@opentelemetry/api";
-import type { Span, Tracer, TracerProvider } from "@opentelemetry/api";
+import type { Link, Span, Tracer, TracerProvider } from "@opentelemetry/api";
 import type {
   ConsumerOpts,
   ConsumerOptsBuilder,
@@ -86,15 +86,16 @@ function injectContext(
   return hdrs;
 }
 
-function extractContext(msg: Msg) {
-  if (msg.headers) {
-    return propagation.extract(
-      context.active(),
-      msg.headers,
-      natsHeaderGetter,
-    );
-  }
-  return context.active();
+function extractLink(msg: Msg): Link | undefined {
+  if (!msg.headers) return undefined;
+  const extractedCtx = propagation.extract(
+    context.active(),
+    msg.headers,
+    natsHeaderGetter,
+  );
+  const spanContext = trace.getSpanContext(extractedCtx);
+  if (!spanContext) return undefined;
+  return { context: spanContext };
 }
 
 function startMessagingSpan(
@@ -103,12 +104,14 @@ function startMessagingSpan(
   operation: string,
   kind: SpanKind,
   operationType: string,
-  parentCtx = context.active(),
+  options?: { links?: Link[] },
 ): Span {
+  const links = options?.links?.length ? options.links : undefined;
   return tracer.startSpan(
     `${subject} ${operation}`,
     {
       kind,
+      links,
       attributes: {
         "messaging.system": "nats",
         "messaging.destination.name": subject,
@@ -116,7 +119,7 @@ function startMessagingSpan(
         "messaging.operation.type": operationType,
       },
     },
-    parentCtx,
+    context.active(),
   );
 }
 
@@ -134,18 +137,19 @@ function wrapSubscription(
       if (prop === Symbol.asyncIterator) {
         return async function* () {
           for await (const msg of target) {
-            const parentCtx = extractContext(msg);
+            const link = extractLink(msg);
             const span = startMessagingSpan(
               tracer,
               subject,
               "process",
               SpanKind.CONSUMER,
               "process",
-              parentCtx,
+              { links: link ? [link] : [] },
             );
+            const spanCtx = trace.setSpan(context.active(), span);
             try {
               yield await context.with(
-                trace.setSpan(parentCtx, span),
+                spanCtx,
                 () => Promise.resolve(msg),
               );
               span.setStatus({ code: SpanStatusCode.OK });
@@ -214,16 +218,16 @@ function tracedSubscribe(
             originalCallback(err, msg);
             return;
           }
-          const parentCtx = extractContext(msg);
+          const link = extractLink(msg);
           const span = startMessagingSpan(
             tracer,
             subject,
             "receive",
             SpanKind.CONSUMER,
             "receive",
-            parentCtx,
+            { links: link ? [link] : [] },
           );
-          context.with(trace.setSpan(parentCtx, span), () => {
+          context.with(trace.setSpan(context.active(), span), () => {
             try {
               originalCallback(err, msg);
               span.setStatus({ code: SpanStatusCode.OK });
@@ -306,20 +310,19 @@ function wrapJsMsgIterator<T extends QueuedIterator<JsMsg>>(
       if (prop === Symbol.asyncIterator) {
         return async function* () {
           for await (const msg of target) {
-            const parentCtx = msg.headers
-              ? propagation.extract(context.active(), msg.headers, natsHeaderGetter)
-              : context.active();
+            const link = extractLink(msg as unknown as Msg);
             const span = startMessagingSpan(
               tracer,
               subject,
               "process",
               SpanKind.CONSUMER,
               "process",
-              parentCtx,
+              { links: link ? [link] : [] },
             );
+            const spanCtx = trace.setSpan(context.active(), span);
             try {
               yield await context.with(
-                trace.setSpan(parentCtx, span),
+                spanCtx,
                 () => Promise.resolve(msg),
               );
               span.setStatus({ code: SpanStatusCode.OK });
@@ -406,20 +409,19 @@ function tracedJsPullSubscribe(
         if (prop === Symbol.asyncIterator) {
           return async function* () {
             for await (const msg of target) {
-              const parentCtx = msg.headers
-                ? propagation.extract(context.active(), msg.headers, natsHeaderGetter)
-                : context.active();
+              const link = extractLink(msg as unknown as Msg);
               const span = startMessagingSpan(
                 tracer,
                 subject,
                 "process",
                 SpanKind.CONSUMER,
                 "process",
-                parentCtx,
+                { links: link ? [link] : [] },
               );
+              const spanCtx = trace.setSpan(context.active(), span);
               try {
                 yield await context.with(
-                  trace.setSpan(parentCtx, span),
+                  spanCtx,
                   () => Promise.resolve(msg),
                 );
                 span.setStatus({ code: SpanStatusCode.OK });

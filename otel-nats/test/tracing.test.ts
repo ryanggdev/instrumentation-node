@@ -230,7 +230,7 @@ test("request timeout sets ERROR status on span", async (t) => {
   }
 });
 
-test("publish/subscribe propagates trace context via headers", async (t) => {
+test("publish/subscribe propagates trace context via span links", async (t) => {
   const tp = makeProvider();
   const ns = await startServer();
   try {
@@ -257,11 +257,25 @@ test("publish/subscribe propagates trace context via headers", async (t) => {
     t.truthy(producerSpan);
     t.truthy(consumerSpan);
 
-    // Both spans should share the same traceId (propagated via headers).
+    // Consumer span should have a link to the producer span (not a parent-child relationship).
+    const links = (consumerSpan as ReadableSpan & { links?: Array<{ context: { traceId: string; spanId: string } }> }).links ?? [];
+    t.is(links.length, 1, "consumer span should have exactly one link");
     t.is(
+      links[0].context.traceId,
+      producerSpan!.spanContext().traceId,
+      "link should reference the producer's traceId",
+    );
+    t.is(
+      links[0].context.spanId,
+      producerSpan!.spanContext().spanId,
+      "link should reference the producer's spanId",
+    );
+
+    // Consumer should have its own trace (not the producer's).
+    t.not(
       producerSpan!.spanContext().traceId,
       consumerSpan!.spanContext().traceId,
-      "producer and consumer should share the same traceId",
+      "consumer should start its own trace, not inherit the producer's",
     );
   } finally {
     await ns.stop();

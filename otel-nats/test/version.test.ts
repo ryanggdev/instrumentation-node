@@ -12,5 +12,5 @@ test("INSTRUMENTATION_NAME matches expected scope name", (t) => {
 });
 
 test("INSTRUMENTATION_VERSION matches package version", (t) => {
-  t.is(INSTRUMENTATION_VERSION, "0.1.0");
+  t.is(INSTRUMENTATION_VERSION, "0.2.0");
 });
