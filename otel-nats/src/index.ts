@@ -1,11 +1,11 @@
-export { withTracing } from "./tracing.ts";
-export type { TracingOptions } from "./tracing.ts";
+export { withTracing } from "./tracing";
+export type { TracingOptions } from "./tracing";
 export {
   NatsHeaderCarrier,
   natsHeaderGetter,
   natsHeaderSetter,
-} from "./propagation.ts";
+} from "./propagation";
 export {
   INSTRUMENTATION_NAME,
   INSTRUMENTATION_VERSION,
-} from "./version.ts";
+} from "./version";

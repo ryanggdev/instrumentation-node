@@ -26,8 +26,8 @@ import type {
 } from "nats";
 import { headers } from "nats";
 
-import { natsHeaderGetter, natsHeaderSetter } from "./propagation.ts";
-import { INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION } from "./version.ts";
+import { natsHeaderGetter, natsHeaderSetter } from "./propagation";
+import { INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION } from "./version";
 
 // ---------------------------------------------------------------------------
 // Public options type

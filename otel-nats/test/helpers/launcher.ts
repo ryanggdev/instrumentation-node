@@ -12,17 +12,20 @@ export interface ServerInfo {
 
 /**
  * Minimal NATS server launcher for tests.
- * Spawns the `nats-server` binary, waits for the ports file, and exposes
- * the dynamically assigned port.
+ *
+ * Two modes:
+ *  1. External server — set `NATS_SERVER_URL` (e.g. `nats://localhost:4222`).
+ *     `stop()` is a no-op; the caller manages the server lifetime.
+ *  2. Spawned binary — set `NATS_SERVER_BIN` or ensure `nats-server` is on PATH.
  */
 export class NatsServer {
   readonly port: number;
   readonly hostname: string;
   readonly monitoring?: number;
-  private process: ChildProcess;
+  private process: ChildProcess | null;
   private stopped = false;
 
-  private constructor(info: ServerInfo, proc: ChildProcess) {
+  private constructor(info: ServerInfo, proc: ChildProcess | null) {
     this.port = info.port;
     this.hostname = info.hostname;
     this.monitoring = info.monitoring;
@@ -36,6 +39,23 @@ export class NatsServer {
   static async start(
     conf: Record<string, unknown> = {},
   ): Promise<NatsServer> {
+    // --- External server mode ---
+    const externalUrl = process.env.NATS_SERVER_URL;
+    if (externalUrl) {
+      const url = new URL(externalUrl);
+      const hostname = url.hostname;
+      const port = parseInt(url.port || "4222", 10);
+      // Best-effort: probe the monitoring endpoint if NATS_MONITORING_URL is set.
+      const monUrl = process.env.NATS_MONITORING_URL;
+      let monitoring: number | undefined;
+      if (monUrl) {
+        monitoring = parseInt(new URL(monUrl).port || "8222", 10);
+        await waitForMonitoring({ hostname, port, monitoring }, 10000);
+      }
+      return new NatsServer({ hostname, port, monitoring }, null);
+    }
+
+    // --- Spawned binary mode ---
     const exe = process.env.NATS_SERVER_BIN ?? "nats-server";
     const tmp = os.tmpdir();
     const dir = fs.mkdtempSync(path.join(tmp, "nats-"));
@@ -69,12 +89,13 @@ export class NatsServer {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    if (!this.process) return; // external server — nothing to stop
     this.process.kill("SIGTERM");
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        this.process.kill("SIGKILL");
+        this.process!.kill("SIGKILL");
       }, 3000);
-      this.process.on("exit", () => {
+      this.process!.on("exit", () => {
         clearTimeout(timer);
         resolve();
       });

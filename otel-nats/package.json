@@ -25,9 +25,9 @@
   "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/types/index.d.ts",
       "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/types/index.d.ts"
+      "require": "./dist/cjs/index.js"
     }
   },
   "files": [
@@ -39,11 +39,12 @@
     "build:cjs": "tsc -p tsconfig.build.json --module commonjs --moduleResolution node --outDir dist/cjs",
     "build:esm": "tsc -p tsconfig.build.json --module es2020 --moduleResolution node --outDir dist/esm",
     "build:types": "tsc -p tsconfig.build.json --declaration --declarationMap --emitDeclarationOnly --outDir dist/types",
-    "build": "npm run build:cjs && npm run build:esm && npm run build:types",
+    "build": "npm run build:cjs && npm run build:esm && npm run build:types && echo '{\"type\":\"commonjs\"}' > dist/cjs/package.json && find dist/esm -name '*.js' -exec sed -i -E 's/from \"(\\.[^\"]*)\"/from \"\\1.js\"/g' {} + && echo '{\"type\":\"module\"}' > dist/esm/package.json",
     "clean": "rm -rf dist",
     "test": "ava --timeout=60000",
     "lint": "eslint src/ test/ --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.0.0",
@@ -56,10 +57,12 @@
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/sdk-trace-node": "^1.30.0",
     "@types/node": "^20.0.0",
+    "@types/ws": "^8.18.1",
     "ava": "^6.1.0",
     "nats": "^2.13.1",
     "tsx": "^4.19.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "ws": "^8.20.0"
   },
   "ava": {
     "files": [
@@ -73,9 +76,5 @@
       "tsx"
     ],
     "timeout": "60s"
-  },
-  "dependencies": {
-    "@types/ws": "^8.18.1",
-    "ws": "^8.20.0"
   }
 }
