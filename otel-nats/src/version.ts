@@ -8,4 +8,4 @@ export const INSTRUMENTATION_NAME =
 /**
  * The version of this instrumentation package.
  */
-export const INSTRUMENTATION_VERSION = "0.2.0";
+export const INSTRUMENTATION_VERSION = "0.2.1";
