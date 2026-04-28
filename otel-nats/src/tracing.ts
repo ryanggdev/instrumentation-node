@@ -27,6 +27,7 @@ import type {
 import { headers } from "nats";
 
 import { natsHeaderGetter, natsHeaderSetter } from "./propagation";
+import { natsTracingEnabled } from "./env-flags";
 import { INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION } from "./version";
 
 // ---------------------------------------------------------------------------
@@ -489,6 +490,8 @@ export function withTracing(
   nc: NatsConnection,
   opts: TracingOptions = {},
 ): NatsConnection {
+  if (!natsTracingEnabled()) return nc;
+
   if ((nc as unknown as Record<symbol, boolean>)[TRACING_SYMBOL]) {
     return nc; // already wrapped — prevent double instrumentation
   }
